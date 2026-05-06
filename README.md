@@ -16,6 +16,13 @@ awake-off
 awake-status
 ```
 
+The first `awake-on` or `awake-off` may ask for your admin password once. It installs a narrow sudoers rule so future toggles do not prompt:
+
+```text
+/usr/bin/pmset -a disablesleep 1
+/usr/bin/pmset -a disablesleep 0
+```
+
 ## Clone install
 
 ```bash
@@ -37,5 +44,6 @@ What it does:
 - `pmset -a disablesleep 1`
 - runs `/usr/bin/caffeinate -dimsu`
 - verifies with `pmset -g live` (`SleepDisabled 1`)
+- auto-configures passwordless sudo for only the two `pmset disablesleep` commands
 
 `awake-off` restores normal sleep with `pmset -a disablesleep 0` and kills the background `caffeinate`.
