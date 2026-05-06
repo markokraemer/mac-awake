@@ -1,0 +1,108 @@
+#!/bin/bash
+set -euo pipefail
+
+PIDFILE="${MAC_SLEEP_FOREVER_PIDFILE:-$HOME/.mac-sleep-forever.pid}"
+LOGFILE="${MAC_SLEEP_FOREVER_LOGFILE:-/tmp/mac-sleep-forever.log}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  mac-sleep-forever on
+  mac-sleep-forever off
+  mac-sleep-forever status
+EOF
+}
+
+require_macos() {
+  [ "$(uname -s)" = "Darwin" ] || {
+    echo "mac-sleep-forever: macOS only" >&2
+    exit 1
+  }
+}
+
+admin_pmset_disablesleep() {
+  local value="$1"
+
+  if [ "$(id -u)" -eq 0 ]; then
+    /usr/bin/pmset -a disablesleep "$value"
+  else
+    /usr/bin/osascript -e "do shell script \"/usr/bin/pmset -a disablesleep $value\" with administrator privileges"
+  fi
+}
+
+sleep_disabled_value() {
+  /usr/bin/pmset -g live | /usr/bin/awk '$1=="SleepDisabled"{print $2}'
+}
+
+pidfile_pid() {
+  [ -f "$PIDFILE" ] && /bin/cat "$PIDFILE" || true
+}
+
+caffeinate_running() {
+  local pid
+  pid="$(pidfile_pid)"
+  [ -n "$pid" ] && /bin/ps -p "$pid" >/dev/null 2>&1
+}
+
+stop_caffeinate() {
+  local pid
+  pid="$(pidfile_pid)"
+  if [ -n "$pid" ]; then
+    /bin/kill "$pid" 2>/dev/null || true
+  fi
+  /bin/rm -f "$PIDFILE"
+}
+
+on() {
+  require_macos
+  stop_caffeinate
+  admin_pmset_disablesleep 1
+
+  /usr/bin/nohup /usr/bin/caffeinate -dimsu >"$LOGFILE" 2>&1 &
+  echo $! > "$PIDFILE"
+
+  if [ "$(sleep_disabled_value)" = "1" ] && caffeinate_running; then
+    echo "ON verified"
+  else
+    echo "ON failed verification" >&2
+    status >&2
+    exit 1
+  fi
+}
+
+off() {
+  require_macos
+  stop_caffeinate
+  admin_pmset_disablesleep 0
+
+  if [ "$(sleep_disabled_value)" = "0" ]; then
+    echo "OFF verified"
+  else
+    echo "OFF failed verification" >&2
+    status >&2
+    exit 1
+  fi
+}
+
+status() {
+  require_macos
+  local sleep_disabled pid
+  sleep_disabled="$(sleep_disabled_value)"
+  pid="$(pidfile_pid)"
+
+  echo "SleepDisabled ${sleep_disabled:-unknown}"
+  if caffeinate_running; then
+    echo "caffeinate running pid=$pid"
+  else
+    echo "caffeinate off"
+  fi
+}
+
+case "${1:-}" in
+  on) on ;;
+  off) off ;;
+  status) status ;;
+  -h|--help|help|"") usage ;;
+  *) usage >&2; exit 2 ;;
+esac
+
