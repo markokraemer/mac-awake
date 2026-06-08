@@ -3,12 +3,22 @@ set -euo pipefail
 
 PIDFILE="${MAC_SLEEP_FOREVER_PIDFILE:-$HOME/.mac-sleep-forever.pid}"
 LOGFILE="${MAC_SLEEP_FOREVER_LOGFILE:-/tmp/mac-sleep-forever.log}"
+TIMER_PIDFILE="${MAC_SLEEP_FOREVER_TIMER_PIDFILE:-$HOME/.mac-sleep-forever.timer.pid}"
+TIMER_DEADLINE="${MAC_SLEEP_FOREVER_TIMER_DEADLINE:-$HOME/.mac-sleep-forever.timer.deadline}"
 SUDOERS_FILE="/private/etc/sudoers.d/mac-sleep-forever"
+
+# Absolute path to this script, so the background timer can re-invoke `off`.
+SELF="$0"
+case "$SELF" in
+  */*) ;;
+  *) SELF="$(command -v "$SELF" 2>/dev/null || echo "$SELF")" ;;
+esac
+SELF="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd)/$(basename "$SELF")"
 
 usage() {
   cat <<'EOF'
 Usage:
-  mac-sleep-forever on
+  mac-sleep-forever on [minutes]   stay awake; with minutes, auto-sleep after that long
   mac-sleep-forever off
   mac-sleep-forever status
 EOF
@@ -119,8 +129,77 @@ stop_caffeinate() {
   /bin/rm -f "$PIDFILE"
 }
 
+timer_pid() {
+  [ -f "$TIMER_PIDFILE" ] && /bin/cat "$TIMER_PIDFILE" || true
+}
+
+timer_running() {
+  local pid
+  pid="$(timer_pid)"
+  [ -n "$pid" ] && /bin/ps -p "$pid" >/dev/null 2>&1
+}
+
+cancel_timer() {
+  local pid
+  pid="$(timer_pid)"
+  # Remove state first so a watcher that wakes mid-cancel sees it is no
+  # longer the active timer and exits without firing `off`.
+  /bin/rm -f "$TIMER_PIDFILE" "$TIMER_DEADLINE"
+  if [ -n "$pid" ]; then
+    /usr/bin/pkill -P "$pid" 2>/dev/null || true
+    /bin/kill "$pid" 2>/dev/null || true
+  fi
+}
+
+start_timer() {
+  local minutes="$1" deadline
+  cancel_timer
+  # Compute and record the deadline here so `status` is correct immediately,
+  # without racing the background watcher's startup.
+  deadline=$(( $(/bin/date +%s) + minutes * 60 ))
+  echo "$deadline" > "$TIMER_DEADLINE"
+  /usr/bin/nohup "$SELF" __timer "$deadline" >>"$LOGFILE" 2>&1 &
+  echo $! > "$TIMER_PIDFILE"
+}
+
+# Background watcher: wait out the countdown, then turn sleep back on.
+# Re-checks the pidfile each tick so `cancel_timer` (or a newer timer) can
+# retire it cleanly without it ever calling `off`.
+timer_run() {
+  local deadline="$1" now
+
+  while :; do
+    now="$(/bin/date +%s)"
+    [ "$now" -ge "$deadline" ] && break
+    /bin/sleep 5
+    # Superseded or cancelled: another invocation owns the timer now.
+    [ "$(timer_pid)" = "$$" ] || exit 0
+  done
+
+  # We are about to fire; drop our own state so `off`'s cancel_timer is a no-op
+  # and never kills this still-running process before it finishes.
+  /bin/rm -f "$TIMER_PIDFILE" "$TIMER_DEADLINE"
+  "$SELF" off >>"$LOGFILE" 2>&1
+}
+
 on() {
   require_macos
+  local minutes="${1:-}"
+
+  if [ -n "$minutes" ]; then
+    case "$minutes" in
+      ''|*[!0-9]*)
+        echo "mac-sleep-forever: minutes must be a positive whole number" >&2
+        exit 2
+        ;;
+    esac
+    [ "$minutes" -ge 1 ] || {
+      echo "mac-sleep-forever: minutes must be at least 1" >&2
+      exit 2
+    }
+  fi
+
+  cancel_timer
   stop_caffeinate
   pmset_disablesleep 1
 
@@ -128,7 +207,12 @@ on() {
   echo $! > "$PIDFILE"
 
   if [ "$(sleep_disabled_value)" = "1" ] && caffeinate_running; then
-    echo "ON verified"
+    if [ -n "$minutes" ]; then
+      start_timer "$minutes"
+      echo "ON verified (auto-off in ${minutes}m)"
+    else
+      echo "ON verified"
+    fi
   else
     echo "ON failed verification" >&2
     status >&2
@@ -138,6 +222,7 @@ on() {
 
 off() {
   require_macos
+  cancel_timer
   stop_caffeinate
   pmset_disablesleep 0
 
@@ -162,12 +247,25 @@ status() {
   else
     echo "caffeinate off"
   fi
+
+  if timer_running && [ -f "$TIMER_DEADLINE" ]; then
+    local deadline now remaining
+    deadline="$(/bin/cat "$TIMER_DEADLINE")"
+    now="$(/bin/date +%s)"
+    remaining=$(( deadline - now ))
+    if [ "$remaining" -gt 0 ]; then
+      echo "auto-off in $(( remaining / 60 ))m $(( remaining % 60 ))s"
+    fi
+  else
+    echo "timer off"
+  fi
 }
 
 case "${1:-}" in
-  on) on ;;
+  on) shift; on "$@" ;;
   off) off ;;
   status) status ;;
+  __timer) require_macos; timer_run "${2:-}" ;;
   -h|--help|help|"") usage ;;
   *) usage >&2; exit 2 ;;
 esac

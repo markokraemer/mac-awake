@@ -12,6 +12,7 @@ Open a new shell, then:
 
 ```bash
 awake-on
+awake-on 30      # stay awake for 30 minutes, then auto-sleep
 awake-off
 awake-status
 ```
@@ -34,7 +35,8 @@ cd mac-sleep-forever
 ## Commands
 
 ```bash
-awake-on
+awake-on            # stay awake forever (until awake-off)
+awake-on 30         # stay awake for 30 minutes, then auto-sleep
 awake-off
 awake-status
 ```
@@ -46,4 +48,20 @@ What it does:
 - verifies with `pmset -g live` (`SleepDisabled 1`)
 - auto-configures passwordless sudo for only the two `pmset disablesleep` commands
 
-`awake-off` restores normal sleep with `pmset -a disablesleep 0` and kills the background `caffeinate`.
+### Timer (`awake-on <minutes>`)
+
+Pass a number of minutes to `awake-on` to keep the Mac awake for just that long,
+then automatically restore normal sleep:
+
+```bash
+awake-on 30         # awake for 30 minutes
+awake-status        # shows: auto-off in 29m 54s
+awake-off           # cancel early at any time
+```
+
+A lightweight background watcher counts down and runs `awake-off` when the timer
+expires. Running `awake-on` again (with or without a timer) replaces any pending
+timer, and `awake-off` cancels it. The minute value must be a positive whole number.
+
+`awake-off` restores normal sleep with `pmset -a disablesleep 0`, kills the background
+`caffeinate`, and cancels any pending auto-off timer.
