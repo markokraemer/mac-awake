@@ -1,11 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-PIDFILE="${MAC_SLEEP_FOREVER_PIDFILE:-$HOME/.mac-sleep-forever.pid}"
-LOGFILE="${MAC_SLEEP_FOREVER_LOGFILE:-/tmp/mac-sleep-forever.log}"
-TIMER_PIDFILE="${MAC_SLEEP_FOREVER_TIMER_PIDFILE:-$HOME/.mac-sleep-forever.timer.pid}"
-TIMER_DEADLINE="${MAC_SLEEP_FOREVER_TIMER_DEADLINE:-$HOME/.mac-sleep-forever.timer.deadline}"
-SUDOERS_FILE="/private/etc/sudoers.d/mac-sleep-forever"
+PIDFILE="${MAC_AWAKE_PIDFILE:-$HOME/.mac-awake.pid}"
+LOGFILE="${MAC_AWAKE_LOGFILE:-/tmp/mac-awake.log}"
+TIMER_PIDFILE="${MAC_AWAKE_TIMER_PIDFILE:-$HOME/.mac-awake.timer.pid}"
+TIMER_DEADLINE="${MAC_AWAKE_TIMER_DEADLINE:-$HOME/.mac-awake.timer.deadline}"
+SUDOERS_FILE="/private/etc/sudoers.d/mac-awake"
 
 # Absolute path to this script, so the background timer can re-invoke `off`.
 SELF="$0"
@@ -18,15 +18,15 @@ SELF="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd)/$(basename "$SELF")"
 usage() {
   cat <<'EOF'
 Usage:
-  mac-sleep-forever on [minutes]   stay awake; with minutes, auto-sleep after that long
-  mac-sleep-forever off
-  mac-sleep-forever status
+  mac-awake on [minutes]   stay awake; with minutes, auto-sleep after that long
+  mac-awake off
+  mac-awake status
 EOF
 }
 
 require_macos() {
   [ "$(uname -s)" = "Darwin" ] || {
-    echo "mac-sleep-forever: macOS only" >&2
+    echo "mac-awake: macOS only" >&2
     exit 1
   }
 }
@@ -45,11 +45,11 @@ run_admin_shell() {
 install_passwordless_pmset() {
   local user script
   user="$(id -un)"
-  script="$(/usr/bin/mktemp /tmp/mac-sleep-forever-sudoers.XXXXXX)"
+  script="$(/usr/bin/mktemp /tmp/mac-awake-sudoers.XXXXXX)"
 
   case "$user" in
     *[!A-Za-z0-9_.-]*|"")
-      echo "mac-sleep-forever: unsupported username for sudoers: $user" >&2
+      echo "mac-awake: unsupported username for sudoers: $user" >&2
       exit 1
       ;;
   esac
@@ -60,13 +60,13 @@ set -euo pipefail
 
 user="$user"
 file="$SUDOERS_FILE"
-sudoers_tmp="\$(/usr/bin/mktemp /tmp/mac-sleep-forever-sudoers-entry.XXXXXX)"
-sudoers_backup="/private/etc/sudoers.mac-sleep-forever.bak"
+sudoers_tmp="\$(/usr/bin/mktemp /tmp/mac-awake-sudoers-entry.XXXXXX)"
+sudoers_backup="/private/etc/sudoers.mac-awake.bak"
 
 /bin/mkdir -p /private/etc/sudoers.d
 
 /bin/cat > "\$sudoers_tmp" <<SUDOERS
-# mac-sleep-forever: allow one user to toggle lid-close no-sleep without repeated prompts.
+# mac-awake: allow one user to toggle lid-close no-sleep without repeated prompts.
 \$user ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 1, /usr/bin/pmset -a disablesleep 0
 SUDOERS
 
@@ -189,12 +189,12 @@ on() {
   if [ -n "$minutes" ]; then
     case "$minutes" in
       ''|*[!0-9]*)
-        echo "mac-sleep-forever: minutes must be a positive whole number" >&2
+        echo "mac-awake: minutes must be a positive whole number" >&2
         exit 2
         ;;
     esac
     [ "$minutes" -ge 1 ] || {
-      echo "mac-sleep-forever: minutes must be at least 1" >&2
+      echo "mac-awake: minutes must be at least 1" >&2
       exit 2
     }
   fi

@@ -1,11 +1,11 @@
-# mac-sleep-forever
+# mac-awake
 
-Minimal macOS helper to keep a Mac awake forever, including lid closed.
+Minimal macOS helper to keep a Mac awake — forever or on a timer — including lid closed.
 
 ## One-line install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/markokraemer/mac-sleep-forever/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/markokraemer/mac-awake/main/install.sh | bash
 ```
 
 Open a new shell, then:
@@ -27,8 +27,8 @@ The first `awake-on` or `awake-off` may ask for your admin password once. It ins
 ## Clone install
 
 ```bash
-git clone https://github.com/markokraemer/mac-sleep-forever.git
-cd mac-sleep-forever
+git clone https://github.com/markokraemer/mac-awake.git
+cd mac-awake
 ./install.sh
 ```
 
