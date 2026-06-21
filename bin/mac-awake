@@ -7,7 +7,12 @@ TIMER_PIDFILE="${MAC_AWAKE_TIMER_PIDFILE:-$HOME/.mac-awake.timer.pid}"
 TIMER_DEADLINE="${MAC_AWAKE_TIMER_DEADLINE:-$HOME/.mac-awake.timer.deadline}"
 SUDOERS_FILE="/private/etc/sudoers.d/mac-awake"
 
-# Absolute path to this script, so the background timer can re-invoke `off`.
+# External binaries, overridable so the timer can be exercised in tests without
+# touching real power management or actually sleeping the machine.
+PMSET_BIN="${MAC_AWAKE_PMSET:-/usr/bin/pmset}"
+CAFFEINATE_BIN="${MAC_AWAKE_CAFFEINATE:-/usr/bin/caffeinate}"
+
+# Absolute path to this script, so the background timer can re-invoke itself.
 SELF="$0"
 case "$SELF" in
   */*) ;;
@@ -18,7 +23,7 @@ SELF="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd)/$(basename "$SELF")"
 usage() {
   cat <<'EOF'
 Usage:
-  mac-awake on [minutes]   stay awake; with minutes, auto-sleep after that long
+  mac-awake on [minutes]   stay awake; with minutes, sleep the Mac after that long
   mac-awake off
   mac-awake status
 EOF
@@ -96,18 +101,42 @@ EOF
 pmset_disablesleep() {
   local value="$1"
 
+  # Override seam (tests): a custom pmset is invoked directly, never via sudo.
+  if [ -n "${MAC_AWAKE_PMSET:-}" ]; then
+    "$PMSET_BIN" -a disablesleep "$value"
+    return 0
+  fi
+
   if [ "$(id -u)" -eq 0 ]; then
-    /usr/bin/pmset -a disablesleep "$value"
-  elif /usr/bin/sudo -n /usr/bin/pmset -a disablesleep "$value" 2>/dev/null; then
+    "$PMSET_BIN" -a disablesleep "$value"
+  elif /usr/bin/sudo -n "$PMSET_BIN" -a disablesleep "$value" 2>/dev/null; then
     return 0
   else
     install_passwordless_pmset
-    /usr/bin/sudo -n /usr/bin/pmset -a disablesleep "$value"
+    /usr/bin/sudo -n "$PMSET_BIN" -a disablesleep "$value"
   fi
 }
 
 sleep_disabled_value() {
-  /usr/bin/pmset -g live | /usr/bin/awk '$1=="SleepDisabled"{print $2}'
+  "$PMSET_BIN" -g live | /usr/bin/awk '$1=="SleepDisabled"{print $2}'
+}
+
+# Actively put the Mac to sleep. This is what makes the timer "auto-sleep":
+# re-enabling sleep with `pmset disablesleep 0` only *allows* sleep, it does not
+# trigger it, so the machine would otherwise just keep running.
+sleep_now() {
+  # Override seam (tests): run a stand-in instead of really sleeping.
+  if [ -n "${MAC_AWAKE_SLEEP_CMD:-}" ]; then
+    /bin/sh -c "$MAC_AWAKE_SLEEP_CMD"
+    return 0
+  fi
+
+  # `pmset sleepnow` works for the console user and needs no GUI automation.
+  "$PMSET_BIN" sleepnow >/dev/null 2>&1 && return 0
+  # Fallback: if pmset can't, ask the window server through System Events.
+  /usr/bin/osascript -e 'tell application "System Events" to sleep' >/dev/null 2>&1 && return 0
+  echo "mac-awake: failed to put the Mac to sleep" >&2
+  return 1
 }
 
 pidfile_pid() {
@@ -162,9 +191,9 @@ start_timer() {
   echo $! > "$TIMER_PIDFILE"
 }
 
-# Background watcher: wait out the countdown, then turn sleep back on.
-# Re-checks the pidfile each tick so `cancel_timer` (or a newer timer) can
-# retire it cleanly without it ever calling `off`.
+# Background watcher: wait out the countdown, then restore normal sleep and put
+# the Mac to sleep. Re-checks the pidfile each tick so `cancel_timer` (or a newer
+# timer) can retire it cleanly without it ever firing.
 timer_run() {
   local deadline="$1" now
 
@@ -176,10 +205,19 @@ timer_run() {
     [ "$(timer_pid)" = "$$" ] || exit 0
   done
 
-  # We are about to fire; drop our own state so `off`'s cancel_timer is a no-op
-  # and never kills this still-running process before it finishes.
+  # Final ownership check: a newer timer may have taken over during the last
+  # tick. If so, that timer is responsible for sleeping, not us.
+  [ "$(timer_pid)" = "$$" ] || exit 0
+
+  # We are about to fire; drop our own state so a concurrent `off`/cancel is a
+  # no-op and never kills this process before it finishes.
   /bin/rm -f "$TIMER_PIDFILE" "$TIMER_DEADLINE"
-  "$SELF" off >>"$LOGFILE" 2>&1
+
+  echo "mac-awake: timer reached deadline; restoring sleep and sleeping now" >&2
+  stop_caffeinate
+  # Best-effort restore so the Mac can actually sleep; then sleep it.
+  pmset_disablesleep 0 || true
+  sleep_now
 }
 
 on() {
@@ -203,13 +241,13 @@ on() {
   stop_caffeinate
   pmset_disablesleep 1
 
-  /usr/bin/nohup /usr/bin/caffeinate -dimsu >"$LOGFILE" 2>&1 &
+  /usr/bin/nohup "$CAFFEINATE_BIN" -dimsu >"$LOGFILE" 2>&1 &
   echo $! > "$PIDFILE"
 
   if [ "$(sleep_disabled_value)" = "1" ] && caffeinate_running; then
     if [ -n "$minutes" ]; then
       start_timer "$minutes"
-      echo "ON verified (auto-off in ${minutes}m)"
+      echo "ON verified (auto-sleep in ${minutes}m)"
     else
       echo "ON verified"
     fi
@@ -254,7 +292,7 @@ status() {
     now="$(/bin/date +%s)"
     remaining=$(( deadline - now ))
     if [ "$remaining" -gt 0 ]; then
-      echo "auto-off in $(( remaining / 60 ))m $(( remaining % 60 ))s"
+      echo "auto-sleep in $(( remaining / 60 ))m $(( remaining % 60 ))s"
     fi
   else
     echo "timer off"

@@ -51,17 +51,28 @@ What it does:
 ### Timer (`awake-on <minutes>`)
 
 Pass a number of minutes to `awake-on` to keep the Mac awake for just that long,
-then automatically restore normal sleep:
+then **put it to sleep**:
 
 ```bash
-awake-on 30         # awake for 30 minutes
-awake-status        # shows: auto-off in 29m 54s
+awake-on 30         # awake for 30 minutes, then sleep
+awake-status        # shows: auto-sleep in 29m 54s
 awake-off           # cancel early at any time
 ```
 
-A lightweight background watcher counts down and runs `awake-off` when the timer
-expires. Running `awake-on` again (with or without a timer) replaces any pending
-timer, and `awake-off` cancels it. The minute value must be a positive whole number.
+A lightweight background watcher counts down and, when the timer expires:
 
-`awake-off` restores normal sleep with `pmset -a disablesleep 0`, kills the background
-`caffeinate`, and cancels any pending auto-off timer.
+1. kills the background `caffeinate`,
+2. restores normal sleep with `pmset -a disablesleep 0`, and
+3. actively sleeps the Mac with `pmset sleepnow` (falling back to
+   `osascript … System Events … sleep`).
+
+Re-enabling sleep alone only *allows* the Mac to sleep later — it does not put it
+to sleep — so the watcher issues the sleep itself. That is what makes the timer
+reliably end in sleep even while you are using the machine.
+
+Running `awake-on` again (with or without a timer) replaces any pending timer, and
+`awake-off` cancels it. The minute value must be a positive whole number.
+
+`awake-off` is a manual stop: it restores normal sleep with `pmset -a disablesleep 0`,
+kills the background `caffeinate`, and cancels any pending timer — but it does **not**
+sleep the Mac (only the timer does).
